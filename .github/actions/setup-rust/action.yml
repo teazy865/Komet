@@ -14,9 +14,13 @@ runs:
   using: composite
   steps:
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@1.81.0
+      uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ inputs.targets }}
+
+    - name: Ensure iOS target
+      shell: bash
+      run: rustup target add aarch64-apple-ios
 
     - name: Cache Rust build
       uses: Swatinem/rust-cache@v2
