@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import AVFoundation
 
 final class KometStreamHandler: NSObject, FlutterStreamHandler {
   private let onSink: (FlutterEventSink?) -> Void
@@ -43,6 +44,7 @@ final class KometStreamHandler: NSObject, FlutterStreamHandler {
       registerVideoNote(messenger)
       registerNotifications(messenger)
       registerScreen(messenger)
+      registerAudioSession(messenger)
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
@@ -62,6 +64,25 @@ final class KometStreamHandler: NSObject, FlutterStreamHandler {
     channel.setStreamHandler(handler)
     streamHandlers.append(handler)
     eventChannels.append(channel)
+  }
+
+  private func registerAudioSession(_ messenger: FlutterBinaryMessenger) {
+    method("komet/audio_session", messenger) { call, result in
+      if call.method == "setPlayback" {
+        do {
+          let session = AVAudioSession.sharedInstance()
+          try session.setCategory(.playback, mode: .default, options: [])
+          try session.setActive(true)
+          result(nil)
+        } catch {
+          result(FlutterError(code: "AUDIO_SESSION",
+                              message: error.localizedDescription,
+                              details: nil))
+        }
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
   }
 
   private func registerAppIcon(_ messenger: FlutterBinaryMessenger) {
