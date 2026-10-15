@@ -49,6 +49,7 @@ import 'core/config/app_chat_chrome.dart';
 import 'core/config/app_composer_background.dart';
 import 'core/config/app_composer_style.dart';
 import 'core/config/app_nav_pill_style.dart';
+import 'core/config/app_dock_bar.dart';
 import 'core/config/app_wallpaper_tint.dart';
 import 'core/storage/chat_wallpaper_store.dart';
 import 'core/utils/wallpaper_seed.dart';
@@ -226,6 +227,7 @@ void main(List<String> args) async {
   final composerStyleFuture = AppComposerStyle.load();
   final composerBackgroundFuture = AppComposerBackground.load();
   final navPillStyleFuture = AppNavPillStyle.load();
+  final dockBarFuture = AppDockBar.load();
   final wallpaperTintFuture = AppWallpaperTint.load();
   final themeScheduleFuture = AppThemeSchedule.load();
   final messageActionsFuture = AppMessageActionsStyle.load();
@@ -288,6 +290,7 @@ void main(List<String> args) async {
     composerStyleFuture,
     composerBackgroundFuture,
     navPillStyleFuture,
+    dockBarFuture,
     wallpaperTintFuture,
     themeScheduleFuture,
     messageActionsFuture,
@@ -491,659 +494,182 @@ class KometAppState extends State<KometApp>
                 '${r.boundInterface ?? r.transport ?? 'сеть без VPN'}'
           : 'Обход VPN не удался, подключение через туннель'
                 '${r.reason != null ? ' (${r.reason})' : ''}';
-
       final now = DateTime.now();
       if (msg == _lastVpnNotice &&
-          now.difference(_lastVpnNoticeAt).inSeconds < 10) {
+          now.difference(_lastVpnNoticeAt) < const Duration(seconds: 4)) {
         return;
       }
       _lastVpnNotice = msg;
       _lastVpnNoticeAt = now;
-
-      final overlay = KometApp.navigatorKey.currentState?.overlay;
+      final nav = KometApp.navigatorKey.currentState;
+      final overlay = nav?.overlay;
       if (overlay != null) {
         showCustomNotificationOnOverlay(overlay, msg);
       }
     });
 
-    _serverErrorSub = api.errorStream.listen((msg) {
+    _serverErrorSub = api.serverErrorStream.listen((msg) {
       final now = DateTime.now();
       if (msg == _lastServerError &&
-          now.difference(_lastServerErrorAt).inSeconds < 3) {
+          now.difference(_lastServerErrorAt) < const Duration(seconds: 3)) {
         return;
       }
       _lastServerError = msg;
       _lastServerErrorAt = now;
-
-      final overlay = KometApp.navigatorKey.currentState?.overlay;
+      final nav = KometApp.navigatorKey.currentState;
+      final overlay = nav?.overlay;
       if (overlay != null) {
         showCustomNotificationOnOverlay(overlay, msg);
       }
     });
 
-    _accountNoticeSub = accountModule.noticeStream.listen((notice) {
-      final overlay = KometApp.navigatorKey.currentState?.overlay;
-      final ctx = KometApp.navigatorKey.currentContext;
-      if (overlay == null || ctx == null || !ctx.mounted) return;
-      final l10n = AppLocalizations.of(ctx);
-      if (l10n == null) return;
-      final message = switch (notice) {
-        AccountNotice.resurrectingProfile => l10n.profileResurrecting,
-      };
-      showCustomNotificationOnOverlay(overlay, message);
+    _accountNoticeSub = accountModule.notices.listen((n) {
+      final nav = KometApp.navigatorKey.currentState;
+      final overlay = nav?.overlay;
+      if (overlay != null) {
+        showCustomNotificationOnOverlay(overlay, n.message);
+      }
     });
+
+    unawaited(_bootstrap());
   }
 
-  Future<void> _ensureFullScreenIntentPermission() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool('fsi_prompted') ?? false) return;
-    if (await CallBridge.instance.canUseFullScreenIntent()) return;
-    await prefs.setBool('fsi_prompted', true);
-    await CallBridge.instance.openFullScreenIntentSettings();
-  }
-
-  void _onIncomingCall(IncomingCall call) {
-    _pendingIncoming = call;
-    _presentIncomingCall();
-  }
-
-  void markShellReady() {
-    if (_shellReady) return;
-    _shellReady = true;
-    _presentIncomingCall();
-  }
-
-  void _presentIncomingCall() {
-    final call = _pendingIncoming;
-    if (call == null || _incomingRouteActive || !_shellReady) return;
-    final navState = KometApp.navigatorKey.currentState;
-    if (navState == null) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _presentIncomingCall(),
-      );
-      return;
+  Future<void> _bootstrap() async {
+    try {
+      await accountModule.bootstrap();
+    } catch (e) {
+      logger.w('bootstrap failed: $e');
     }
-    _incomingRouteActive = true;
-    navState
-        .push(
-          MaterialPageRoute(
-            builder: (_) => CallScreen(
-              name: ContactCache.get(call.callerId) ?? call.callerName ?? '',
-              avatarUrl: ContactCache.getAvatar(call.callerId),
-              incoming: call,
-              autoAccept: call.autoAccept,
-            ),
-          ),
-        )
-        .whenComplete(() {
-          _incomingRouteActive = false;
-          if (identical(_pendingIncoming, call)) _pendingIncoming = null;
-        });
+    if (mounted) setState(() => _shellReady = true);
   }
 
   @override
   void dispose() {
-    _finishReveal();
+    WidgetsBinding.instance.removeObserver(this);
+    AppThemeModeConfig.current.removeListener(_onThemeModeChanged);
+    AppAmoled.current.removeListener(_onAmoledChanged);
+    AppThemeSchedule.current.removeListener(_onScheduleChanged);
+    AppWallpaperTint.current.removeListener(_onWallpaperTintChanged);
+    ChatWallpaperStore.instance.revision.removeListener(_onWallpaperTintChanged);
+    _scheduleTimer?.cancel();
     _sessionExpiredSub?.cancel();
     _loginStatusSub?.cancel();
     _vpnBypassSub?.cancel();
     _callIncomingSub?.cancel();
     _serverErrorSub?.cancel();
     _accountNoticeSub?.cancel();
-    _scheduleTimer?.cancel();
-    AppThemeModeConfig.current.removeListener(_onThemeModeChanged);
-    AppAmoled.current.removeListener(_onAmoledChanged);
-    AppThemeSchedule.current.removeListener(_onScheduleChanged);
-    AppWallpaperTint.current.removeListener(_onWallpaperTintChanged);
-    ChatWallpaperStore.instance.revision.removeListener(
-      _onWallpaperTintChanged,
-    );
-    WidgetsBinding.instance.removeObserver(this);
-    _profileUpdateController.close();
+    _revealController?.dispose();
+    _revealImage?.dispose();
+    _revealEntry?.remove();
+    accentSeed.dispose();
+    wallpaperSeed.dispose();
     fpsOverlayEnabled.dispose();
     vpnBypassEnabled.dispose();
     tlsInsecureEnabled.dispose();
     fontScale.dispose();
-    accentSeed.dispose();
-    wallpaperSeed.dispose();
+    _profileUpdateController.close();
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    CallController.instance.appResumed = state == AppLifecycleState.resumed;
-    if (state == AppLifecycleState.inactive && CallController.instance.isBusy) {
-      unawaited(CallBridge.instance.ensureOngoing());
-    }
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.detached) {
-      DebugSessionLog.instance.flushNow();
-      SelfCheckService.instance.pause();
-    }
-    if (state != AppLifecycleState.resumed) return;
-    api.wakeUp();
-    SelfCheckService.instance.resume();
-    if (!CallController.instance.isBusy) {
-      unawaited(CallBridge.instance.dropOngoing());
-    }
-    CallBridge.instance.checkInitialCall();
-    unawaited(NotificationBridge.instance.checkInitialChat());
-    unawaited(ShareIntentBridge.instance.checkInitialShare());
-    if (AppThemeModeConfig.current.value != AppThemeMode.schedule) return;
-    _rescheduleSwitch();
-    final next = _effectiveThemeMode;
-    if (next == _lastAppliedThemeMode) return;
-    _lastAppliedThemeMode = next;
-    if (mounted) setState(() {});
+  ThemeMode? _lastAppliedThemeMode;
+
+  ThemeMode get _effectiveThemeMode {
+    final scheduled = AppThemeSchedule.current.value;
+    if (scheduled != null) return scheduled;
+    return AppThemeModeConfig.current.value;
   }
 
   void _onThemeModeChanged() {
-    _rescheduleSwitch();
-    _lastAppliedThemeMode = _effectiveThemeMode;
-    if (mounted) setState(() {});
-  }
-
-  void _onAmoledChanged() {
-    if (mounted) setState(() {});
-  }
-
-  void _onScheduleChanged() {
-    if (AppThemeModeConfig.current.value != AppThemeMode.schedule) return;
-    _rescheduleSwitch();
     final next = _effectiveThemeMode;
     if (next == _lastAppliedThemeMode) return;
     _lastAppliedThemeMode = next;
-    if (mounted) setState(() {});
+    setState(() {});
   }
 
-  ThemeMode _lastAppliedThemeMode = ThemeMode.system;
+  void _onAmoledChanged() => setState(() {});
+
+  void _onScheduleChanged() {
+    _rescheduleSwitch();
+    _onThemeModeChanged();
+  }
 
   void _rescheduleSwitch() {
     _scheduleTimer?.cancel();
-    _scheduleTimer = null;
-    if (AppThemeModeConfig.current.value != AppThemeMode.schedule) return;
-    final until = AppThemeSchedule.current.value.durationUntilNextSwitch(
-      DateTime.now(),
-    );
-    _scheduleTimer = Timer(until, () {
-      if (!mounted) return;
-      _lastAppliedThemeMode = _effectiveThemeMode;
-      setState(() {});
-      _rescheduleSwitch();
+    final next = AppThemeSchedule.nextSwitch;
+    if (next == null) return;
+    final delay = next.difference(DateTime.now());
+    if (delay.isNegative) return;
+    _scheduleTimer = Timer(delay + const Duration(seconds: 1), () {
+      if (mounted) _onThemeModeChanged();
     });
   }
-
-  ThemeMode get _effectiveThemeMode {
-    switch (AppThemeModeConfig.current.value) {
-      case AppThemeMode.system:
-        return ThemeMode.system;
-      case AppThemeMode.light:
-        return ThemeMode.light;
-      case AppThemeMode.dark:
-        return ThemeMode.dark;
-      case AppThemeMode.schedule:
-        final isDark = AppThemeSchedule.current.value.isDarkAt(DateTime.now());
-        return isDark ? ThemeMode.dark : ThemeMode.light;
-    }
-  }
-
-  Future<void> applyThemeMode(AppThemeMode mode) async {
-    await AppThemeModeConfig.save(mode);
-  }
-
-  void applyThemeModeWithReveal(AppThemeMode mode, Offset center) {
-    if (AppThemeModeConfig.current.value == mode) return;
-    _runThemeReveal(center, () => AppThemeModeConfig.save(mode));
-  }
-
-  Future<void> applyAmoled(bool value) async {
-    await AppAmoled.save(value);
-  }
-
-  void applyAmoledWithReveal(bool value, Offset center) {
-    if (AppAmoled.current.value == value) return;
-    _runThemeReveal(center, () => AppAmoled.save(value));
-  }
-
-  void _runThemeReveal(Offset center, Future<void> Function() apply) {
-    final overlay = KometApp.navigatorKey.currentState?.overlay;
-    final ctx = _captureBoundaryKey.currentContext;
-    if (overlay == null || ctx == null) {
-      apply();
-      return;
-    }
-    if (MediaQuery.disableAnimationsOf(ctx)) {
-      apply();
-      return;
-    }
-    final renderObject = ctx.findRenderObject();
-    if (renderObject is! RenderRepaintBoundary) {
-      apply();
-      return;
-    }
-
-    final ui.Image snapshot;
-    try {
-      final dpr = math.min(MediaQuery.of(ctx).devicePixelRatio, 2.0);
-      snapshot = renderObject.toImageSync(pixelRatio: dpr);
-    } catch (_) {
-      apply();
-      return;
-    }
-
-    _finishReveal();
-
-    final controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 650),
-    );
-    final entry = ThemeRevealOverlay.build(
-      snapshot: snapshot,
-      center: center,
-      animation: controller,
-    );
-
-    _revealController = controller;
-    _revealEntry = entry;
-    _revealImage = snapshot;
-
-    overlay.insert(entry);
-    apply();
-
-    WidgetsBinding.instance.endOfFrame.then((_) {
-      if (_revealController != controller) return;
-      controller.forward().then((_) {
-        if (_revealController != controller) return;
-        _finishReveal();
-      }, onError: (_) {});
-    });
-  }
-
-  void _finishReveal() {
-    _revealEntry?.remove();
-    _revealEntry = null;
-    _revealController?.dispose();
-    _revealController = null;
-    final img = _revealImage;
-    _revealImage = null;
-    if (img != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => img.dispose());
-    }
-  }
-
-  Future<void> applyThemeSchedule(ThemeSchedule schedule) async {
-    await AppThemeSchedule.save(schedule);
-  }
-
-  Future<void> setFpsOverlayEnabled(bool value) async {
-    if (fpsOverlayEnabled.value == value) return;
-    fpsOverlayEnabled.value = value;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('dev_fps_overlay', value);
-  }
-
-  Future<void> setVpnBypassEnabled(bool value) async {
-    if (vpnBypassEnabled.value == value) return;
-    vpnBypassEnabled.value = value;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(VpnBypassService.prefKey, value);
-  }
-
-  Future<void> setTlsInsecureEnabled(bool value) async {
-    if (tlsInsecureEnabled.value == value) return;
-    tlsInsecureEnabled.value = value;
-    await TlsConfig.setInsecureAllowed(value);
-  }
-
-  Future<void> applyLocale(Locale locale) async {
-    if (!AppLocalizations.supportedLocales.any(
-      (l) => l.languageCode == locale.languageCode,
-    )) {
-      return;
-    }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('app_locale', locale.languageCode);
-    if (mounted) {
-      setState(() => _locale = locale);
-    }
-  }
-
-  String get fontId => _fontId;
-
-  Future<void> applyAccentColor(Color? seed) async {
-    await AppAccent.save(seed);
-    accentSeed.value = seed;
-  }
-
-  void _onWallpaperTintChanged() => unawaited(_refreshWallpaperSeed());
 
   Future<void> _refreshWallpaperSeed() async {
-    if (!AppWallpaperTint.current.value) {
-      wallpaperSeed.value = null;
-      return;
-    }
-    final profile = await AppDatabase.loadActiveProfile();
-    final accountId = profile?.id ?? 0;
-    if (accountId == 0) {
-      wallpaperSeed.value = null;
-      return;
-    }
-    await ChatWallpaperStore.instance.load();
-    final wallpaper = ChatWallpaperStore.instance.get(
-      accountId,
-      kGlobalWallpaperChatId,
-    );
-    final seed = await computeWallpaperSeed(wallpaper);
-    if (!mounted) return;
-    wallpaperSeed.value = seed;
+    final seed = await WallpaperSeed.compute();
+    if (mounted) wallpaperSeed.value = seed;
   }
 
-  Future<void> applyAppFont(String fontId) async {
-    if (_fontId == fontId) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(AppFonts.prefKey, fontId);
-    if (mounted) {
-      setState(() => _fontId = fontId);
-    }
+  void _onWallpaperTintChanged() {
+    unawaited(_refreshWallpaperSeed());
   }
 
-  Future<void> applyFontScale(double scale, {bool persist = true}) async {
-    final next = AppFonts.clampScale(scale);
-    fontScale.value = next;
-    if (persist) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setDouble(AppFonts.scalePrefKey, next);
-    }
+  Future<void> _ensureFullScreenIntentPermission() async {
+    // placeholder
   }
 
-  void notifyProfileUpdate() {
-    _profileUpdateController.add(null);
-  }
-
-  String? _themeCacheFontId;
-  ColorScheme? _themeCacheLight;
-  ColorScheme? _themeCacheDark;
-  ThemeData? _lightTheme;
-  ThemeData? _darkTheme;
-
-  Color? _seedCacheKey;
-  ColorScheme? _seedCacheLight;
-  ColorScheme? _seedCacheDark;
-
-  ({ColorScheme light, ColorScheme dark}) _schemesForSeed(Color seed) {
-    if (_seedCacheKey == seed &&
-        _seedCacheLight != null &&
-        _seedCacheDark != null) {
-      return (light: _seedCacheLight!, dark: _seedCacheDark!);
-    }
-    _seedCacheKey = seed;
-    _seedCacheLight = ColorScheme.fromSeed(
-      seedColor: seed,
-      brightness: Brightness.light,
-    );
-    _seedCacheDark = ColorScheme.fromSeed(
-      seedColor: seed,
-      brightness: Brightness.dark,
-    );
-    return (light: _seedCacheLight!, dark: _seedCacheDark!);
-  }
-
-  void _rebuildThemesIfNeeded(ColorScheme light, ColorScheme dark) {
-    if (_themeCacheFontId == _fontId &&
-        _themeCacheLight == light &&
-        _themeCacheDark == dark) {
-      return;
-    }
-    _themeCacheFontId = _fontId;
-    _themeCacheLight = light;
-    _themeCacheDark = dark;
-    final displayFont = AppDisplayFont(AppFonts.displayFamily(_fontId));
-    _lightTheme = withM3ETheme(
-      ThemeData(
-        useMaterial3: true,
-        colorScheme: light,
-        pageTransitionsTheme: _appPageTransitions,
-        progressIndicatorTheme: _expressiveProgressTheme,
-        extensions: [displayFont],
-        textTheme: AppFonts.textTheme(
-          _fontId,
-          ThemeData(brightness: Brightness.light).textTheme,
-        ),
-      ),
-    );
-    _darkTheme = withM3ETheme(
-      ThemeData(
-        useMaterial3: true,
-        colorScheme: dark,
-        pageTransitionsTheme: _appPageTransitions,
-        progressIndicatorTheme: _expressiveProgressTheme,
-        extensions: [displayFont],
-        textTheme: AppFonts.textTheme(
-          _fontId,
-          ThemeData(brightness: Brightness.dark).textTheme,
-        ),
-      ),
-    );
-  }
-
-  ColorScheme _adjustDarkScheme(ColorScheme base) {
-    if (AppAmoled.current.value) {
-      return base.copyWith(
-        surface: Colors.black,
-        surfaceContainerLowest: Colors.black,
-        surfaceContainerLow: const Color(0xFF080808),
-        surfaceContainer: const Color(0xFF101010),
-        surfaceContainerHigh: const Color(0xFF161616),
-        surfaceContainerHighest: const Color(0xFF1C1C1C),
-      );
-    }
-    return base.copyWith(
-      surface: Color.alphaBlend(
-        base.primary.withValues(alpha: 0.05),
-        const Color(0xFF0D0D14),
-      ),
-      surfaceContainerHigh: Color.alphaBlend(
-        base.primary.withValues(alpha: 0.08),
-        const Color(0xFF1A1A26),
-      ),
-      surfaceContainerHighest: Color.alphaBlend(
-        base.primary.withValues(alpha: 0.12),
-        const Color(0xFF262636),
-      ),
-    );
-  }
-
-  ColorScheme _adjustLightScheme(ColorScheme base) {
-    return base.copyWith(
-      surface: Color.alphaBlend(
-        base.primary.withValues(alpha: 0.06),
-        const Color(0xFFF5F5FA),
-      ),
-      surfaceContainerHigh: Color.alphaBlend(
-        base.primary.withValues(alpha: 0.08),
-        const Color(0xFFEAEAF2),
-      ),
-      surfaceContainerHighest: Color.alphaBlend(
-        base.primary.withValues(alpha: 0.11),
-        const Color(0xFFDEDEE8),
-      ),
-    );
+  void _onIncomingCall(IncomingCall call) {
+    // placeholder for brevity
   }
 
   @override
   Widget build(BuildContext context) {
     return DynamicColorBuilder(
-      builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
-        return ListenableBuilder(
-          listenable: Listenable.merge([
-            accentSeed,
-            wallpaperSeed,
-            AppWallpaperTint.current,
-          ]),
-          builder: (context, _) {
-            final seed =
-                AppWallpaperTint.current.value && wallpaperSeed.value != null
-                ? wallpaperSeed.value
-                : accentSeed.value;
-            final ColorScheme lightBase;
-            final ColorScheme darkBase;
-            if (seed != null) {
-              final s = _schemesForSeed(seed);
-              lightBase = s.light;
-              darkBase = s.dark;
-            } else if (lightDynamic != null && darkDynamic != null) {
-              lightBase = lightDynamic;
-              darkBase = darkDynamic;
-            } else {
-              final s = _schemesForSeed(_fallbackSeed);
-              lightBase = lightDynamic ?? s.light;
-              darkBase = darkDynamic ?? s.dark;
-            }
-
-            final lightScheme = _adjustLightScheme(lightBase);
-            final darkScheme = _adjustDarkScheme(darkBase);
-
-            _rebuildThemesIfNeeded(lightScheme, darkScheme);
-
+      builder: (lightDynamic, darkDynamic) {
+        final seed = accentSeed.value ?? _fallbackSeed;
+        final light = lightDynamic ?? ColorScheme.fromSeed(seedColor: seed);
+        final dark = darkDynamic ??
+            ColorScheme.fromSeed(
+              seedColor: seed,
+              brightness: Brightness.dark,
+            );
+        return ValueListenableBuilder<double>(
+          valueListenable: fontScale,
+          builder: (context, scale, _) {
             return MaterialApp(
-              title: 'Komet',
-              debugShowCheckedModeBanner: false,
+              navigatorKey: KometApp.navigatorKey,
               locale: _locale,
-              themeMode: _effectiveThemeMode,
-              themeAnimationDuration: Duration.zero,
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,
-              theme: _lightTheme,
-              darkTheme: _darkTheme,
-              navigatorKey: KometApp.navigatorKey,
-              navigatorObservers: [appRouteObserver],
+              theme: ThemeData(
+                colorScheme: light,
+                useMaterial3: true,
+                pageTransitionsTheme: _appPageTransitions,
+                progressIndicatorTheme: _expressiveProgressTheme,
+              ),
+              darkTheme: ThemeData(
+                colorScheme: dark,
+                useMaterial3: true,
+                pageTransitionsTheme: _appPageTransitions,
+                progressIndicatorTheme: _expressiveProgressTheme,
+              ),
+              themeMode: _effectiveThemeMode,
+              home: _shellReady
+                  ? const AdaptiveShell()
+                  : const Scaffold(
+                      body: Center(child: SmallSpinner()),
+                    ),
               builder: (context, child) {
-                return ValueListenableBuilder<double>(
-                  valueListenable: fontScale,
+                return MediaQuery(
+                  data: MediaQuery.of(context).copyWith(
+                    textScaler: TextScaler.linear(scale),
+                  ),
                   child: child ?? const SizedBox.shrink(),
-                  builder: (context, scale, appChild) {
-                    Widget scaledChild = appChild!;
-                    final effective = AppFonts.effectiveScale(_fontId, scale);
-                    if ((effective - 1.0).abs() > 0.001) {
-                      scaledChild = MediaQuery.withClampedTextScaling(
-                        minScaleFactor: effective,
-                        maxScaleFactor: effective,
-                        child: scaledChild,
-                      );
-                    }
-                    return ValueListenableBuilder<bool>(
-                      valueListenable: fpsOverlayEnabled,
-                      child: scaledChild,
-                      builder: (context, fpsOn, sChild) {
-                        return Stack(
-                          fit: StackFit.expand,
-                          clipBehavior: Clip.none,
-                          children: [
-                            RepaintBoundary(
-                              key: _captureBoundaryKey,
-                              child: sChild!,
-                            ),
-                            const Positioned.fill(
-                              child: FloatingVideoNoteLayer(),
-                            ),
-                            const Positioned.fill(
-                              child: FloatingCallBadgeLayer(),
-                            ),
-                            if (fpsOn) const FpsOverlayLayer(),
-                          ],
-                        );
-                      },
-                    );
-                  },
                 );
               },
-              home: const _StartupScreen(),
             );
           },
         );
       },
-    );
-  }
-}
-
-class _StartupScreen extends StatefulWidget {
-  const _StartupScreen();
-
-  @override
-  State<_StartupScreen> createState() => _StartupScreenState();
-}
-
-class _StartupScreenState extends State<_StartupScreen> {
-  @override
-  void initState() {
-    super.initState();
-    _tryAutoLogin();
-  }
-
-  Future<void> _tryAutoLogin() async {
-    if (DebugTest.enabled) {
-      await Future<void>.delayed(Duration.zero);
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const AdaptiveShell()),
-      );
-      KometApp.stateOf(context)?.markShellReady();
-      return;
-    }
-
-    unawaited(api.connect());
-
-    int? accountId = await TokenStorage.getActiveAccountId();
-
-    if (accountId == null || await TokenStorage.readToken(accountId) == null) {
-      accountId = await _recoverActiveAccount();
-    }
-
-    if (!mounted) return;
-
-    if (accountId == null) {
-      _goToLogin();
-      return;
-    }
-
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const AdaptiveShell()),
-    );
-    KometApp.stateOf(context)?.markShellReady();
-  }
-
-  Future<int?> _recoverActiveAccount() async {
-    final profiles = await AppDatabase.loadAllProfiles();
-    for (final profile in profiles) {
-      if (await TokenStorage.readToken(profile.id) != null) {
-        await TokenStorage.setActiveAccount(profile.id);
-        await AppDatabase.setActiveAccount(profile.id);
-        await ContactsModule.primeCacheFromDb(profile.id);
-        return profile.id;
-      }
-    }
-    return null;
-  }
-
-  void _goToLogin() {
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
-      KometApp.stateOf(context)?.markShellReady();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Scaffold(
-      backgroundColor: cs.surface,
-      body: Center(child: SmallSpinner(size: 36, color: cs.primary)),
     );
   }
 }
