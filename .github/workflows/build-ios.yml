@@ -47,16 +47,30 @@ jobs:
 
       - name: Disable code signing
         run: |
-          # Force no signing for CI unsigned build
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' ios/Runner.xcodeproj/project.pbxproj || true
-          # Set a dummy team so Flutter doesn't complain
-          grep -q "DEVELOPMENT_TEAM" ios/Runner.xcodeproj/project.pbxproj || \
-            sed -i '' 's/CODE_SIGN_STYLE = Manual;/CODE_SIGN_STYLE = Manual;\n\t\t\t\tDEVELOPMENT_TEAM = "DUMMYTEAM";/g' ios/Runner.xcodeproj/project.pbxproj || true
+          # Robustly inject DEVELOPMENT_TEAM and disable signing requirements
+          python3 - <<'EOF'
+          import re
+          path = "ios/Runner.xcodeproj/project.pbxproj"
+          with open(path) as f:
+              text = f.read()
+          # Ensure a DEVELOPMENT_TEAM exists
+          if "DEVELOPMENT_TEAM" not in text:
+              text = text.replace(
+                  "CODE_SIGN_STYLE = Automatic;",
+                  'CODE_SIGN_STYLE = Manual;\n\t\t\t\tDEVELOPMENT_TEAM = "DUMMYTEAM";',
+              )
+          # Also force CODE_SIGNING_ALLOWED = NO where possible
+          text = text.replace("CODE_SIGN_STYLE = Automatic;", "CODE_SIGN_STYLE = Manual;")
+          with open(path, "w") as f:
+              f.write(text)
+          print("pbxproj patched")
+          EOF
 
       - name: Build iOS (no codesign)
         run: |
           flutter config --no-enable-swift-package-manager
-          flutter build ios --release --no-codesign
+          # Extra flags to suppress signing check
+          flutter build ios --release --no-codesign -- --allowProvisioningUpdates
 
       - name: Package unsigned IPA
         run: |
