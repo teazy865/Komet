@@ -1,0 +1,53 @@
+--- a/lib/frontend/screens/chats/chat_list_screen.dart
++++ b/lib/frontend/screens/chats/chat_list_screen.dart
+@@ -1,5 +1,6 @@
+ import '../../../core/config/app_nav_pill_style.dart';
++import '../../../core/config/app_dock_bar.dart';
+ 
+ class _ChatListScreenState extends State<ChatListScreen>
+@@ -200,15 +201,17 @@
+-  static const List<PillNavItem> _chatsNavItems = [
+-    PillNavItem(icon: Symbols.chat_bubble, label: 'Чаты'),
+-    PillNavItem(icon: Symbols.call, label: 'Звонки'),
+-    PillNavItem(icon: Symbols.person_pin, label: 'Контакты'),
+-    PillNavItem(
+-      icon: Symbols.settings,
+-      label: 'Настройки',
+-      longPressable: true,
+-      animationAsset: AppAnimations.settings,
+-    ),
+-  ];
++  List<PillNavItem> get _chatsNavItems {
++    final items = AppDockBar.visible;
++    return items.map((item) {
++      final icon = AppDockBar.iconFor(item);
++      final longPress = item.id == 'settings';
++      return PillNavItem(
++        icon: icon,
++        label: item.label,
++        longPressable: longPress,
++        animationAsset: longPress ? AppAnimations.settings : null,
++      );
++    }).toList();
++  }
+
+@@ -2300,15 +2301,20 @@
+-SlidingPillNav(
+-                items: _chatsNavItems,
+-                ...
+-                onItemLongPress: (index, pos) {
+-                  if (index == 3) _openAccountSwitcher(pos);
+-                },
++SlidingPillNav(
++                items: _chatsNavItems,
++                iconsOnly: true,
++                backgroundColor: Colors.black.withValues(alpha: 0.75),
++                borderColor: Colors.white.withValues(alpha: 0.12),
++                iconSize: 22,
++                labelGap: 0,
++                onItemLongPress: (index, pos) {
++                  final items = AppDockBar.visible;
++                  if (index < items.length && items[index].id == 'settings') {
++                    _openAccountSwitcher(pos);
++                  }
++                },
