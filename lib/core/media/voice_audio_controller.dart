@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../utils/download_progress.dart';
 import '../utils/logger.dart';
 import '../utils/media_cache.dart';
+import 'ios_audio_session.dart';
 import 'opus_ogg_index.dart';
 
 enum VoiceAudioFailure { none, download, playback }
@@ -69,6 +70,7 @@ class VoiceAudioController {
 
   Future<void> play() async {
     if (_disposed) return;
+    await IosAudioSession.ensurePlayback();
     if (!await _ensureLoaded()) return;
     if (_disposed) return;
 
