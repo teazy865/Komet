@@ -7,6 +7,7 @@ import '../../widgets/settings_card.dart';
 import 'app_icon_screen.dart';
 import 'appearance_screen.dart';
 import 'chat_background_screen.dart';
+import 'dock_bar_settings_screen.dart';
 import 'font_settings_screen.dart';
 import 'message_actions_screen.dart';
 import 'theme_settings_screen.dart';
@@ -58,6 +59,11 @@ class _CustomizationSectionState extends State<CustomizationSection> {
       icon: Symbols.touch_app,
       title: 'Меню действий',
       builder: (context) => const MessageActionsScreen(),
+    ),
+    _CustomizationCategory(
+      icon: Symbols.dock_to_bottom,
+      title: 'Dock Bar',
+      builder: (context) => const DockBarSettingsScreen(),
     ),
     _CustomizationCategory(
       icon: Symbols.apps,
