@@ -45,33 +45,9 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Disable code signing
-        run: |
-          # Robustly inject DEVELOPMENT_TEAM and disable signing requirements
-          python3 - <<'EOF'
-          import re
-          path = "ios/Runner.xcodeproj/project.pbxproj"
-          with open(path) as f:
-              text = f.read()
-          # Ensure a DEVELOPMENT_TEAM exists
-          if "DEVELOPMENT_TEAM" not in text:
-              text = text.replace(
-                  "CODE_SIGN_STYLE = Automatic;",
-                  'CODE_SIGN_STYLE = Manual;\n\t\t\t\tDEVELOPMENT_TEAM = "DUMMYTEAM";',
-              )
-          # Also force CODE_SIGNING_ALLOWED = NO where possible
-          text = text.replace("CODE_SIGN_STYLE = Automatic;", "CODE_SIGN_STYLE = Manual;")
-          with open(path, "w") as f:
-              f.write(text)
-          print("pbxproj patched")
-          EOF
-
       - name: Build iOS (no codesign)
         run: |
           flutter config --no-enable-swift-package-manager
-          # Bypass the Development Team check for unsigned CI builds
-          export CODE_SIGNING_ALLOWED=NO
-          export CODE_SIGNING_REQUIRED=NO
           flutter build ios --release --no-codesign
 
       - name: Package unsigned IPA
