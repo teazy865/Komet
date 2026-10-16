@@ -16,6 +16,7 @@ flutter_rust_bridge = "=2.12.0"
 png = "0.17"
 rand_core = { version = "0.6", features = ["getrandom"] }
 sha2 = "0.10"
+backtrace = "=0.3.69"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
