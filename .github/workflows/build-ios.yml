@@ -45,6 +45,12 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
+      - name: Pin backtrace for iOS
+        run: |
+          cd native/komet_crypto/rust
+          cargo update -p backtrace --precise 0.3.69 || true
+          cargo generate-lockfile || true
+
       - name: Build iOS (no codesign)
         run: |
           flutter config --no-enable-swift-package-manager
